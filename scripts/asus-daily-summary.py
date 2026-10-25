@@ -64,7 +64,7 @@ WECOM_MAX_BYTES = 4000        # WeCom markdown hard limit is 4096; keep margin
 
 # ---- status levels -------------------------------------------------------
 OK, WARN, CRIT, UNKNOWN = "OK", "WARN", "CRIT", "UNKNOWN"
-LEVEL_CN = {OK: "正常", WARN: "异常", CRIT: "严重", UNKNOWN: "未检查/失败"}
+LEVEL_CN = {OK: "正常", WARN: "注意", CRIT: "严重异常", UNKNOWN: "未知/未检查"}
 
 
 def run(cmd, timeout=20):
@@ -105,7 +105,7 @@ def color(lv):
 
 def tag(lv):
     # WeCom markdown font colors: info(green) warning(orange-red) comment(gray)
-    return '<font color="%s">%s</font>' % (color(lv), {OK: "正常", WARN: "注意", CRIT: "异常", UNKNOWN: "未知"}[lv])
+    return '<font color="%s">%s</font>' % (color(lv), LEVEL_CN[lv])
 
 
 # ---- collectors ----------------------------------------------------------
@@ -598,8 +598,8 @@ def render(col, host):
     now = datetime.now().strftime("%Y-%m-%d %H:%M %Z")
     n_crit, n_warn = col.count(CRIT), col.count(WARN)
     n_unk = col.count(UNKNOWN)
-    overall = CRIT if n_crit else (WARN if n_warn else (UNKNOWN if n_unk else OK))
-    title_color = {"OK": "info", WARN: "warning", CRIT: "warning", UNKNOWN: "comment"}[overall]
+    overall = col.worst()
+    title_color = color(overall)
     L = []
     L.append("## 🖥️ asus 每日巡检摘要")
     L.append("> %s（Asia/Shanghai）" % now)
@@ -612,11 +612,17 @@ def render(col, host):
     L.append("")
     if BESZEL_URL:
         L.append("> Beszel：" + BESZEL_URL)
-    msg = "\n".join(L)
-    b = msg.encode("utf-8")
-    if len(b) > WECOM_MAX_BYTES:
-        msg = b[:WECOM_MAX_BYTES].decode("utf-8", "ignore") + "\n> …（内容超长已截断，详见服务器日志）"
-    return msg, overall
+    return "\n".join(L), overall
+
+
+def limit_wecom_message(msg):
+    """Limit only the outbound message; local reports keep the complete text."""
+    encoded = msg.encode("utf-8")
+    if len(encoded) <= WECOM_MAX_BYTES:
+        return msg
+    suffix = "\n> …（企业微信消息已截断；完整报告见本机 latest.md 和当日日志）"
+    budget = WECOM_MAX_BYTES - len(suffix.encode("utf-8"))
+    return encoded[:budget].decode("utf-8", "ignore") + suffix
 
 
 def write_log(msg, overall, result):
@@ -713,9 +719,20 @@ def main():
         print("SEND_SKIP no key file at %s (message rendered & logged only)" % args.key_file)
         return 0
 
-    key = load_key(args.key_file)
     try:
-        resp = send_wecom(key, msg)
+        key = load_key(args.key_file)
+    except (OSError, SystemExit) as e:
+        error_type = type(e).__name__
+        try:
+            write_log(msg, overall, "FAILED: WeCom key validation (%s)" % error_type)
+        except OSError as log_error:
+            print("REPORT_SAVE_ERROR unable to save report under %s (%s)"
+                  % (LOG_DIR, type(log_error).__name__), file=sys.stderr)
+            return 3
+        print("SEND_ERROR key file could not be validated (%s); no message sent" % error_type)
+        return 1
+    try:
+        resp = send_wecom(key, limit_wecom_message(msg))
     except Exception as e:  # noqa: BLE001
         # urllib exceptions can include the request URL, which contains the bot key.
         # Log only the exception class; never print exception text or formatted exception representations.

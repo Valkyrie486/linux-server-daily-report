@@ -24,6 +24,117 @@ class DailySummaryDryRunTests(unittest.TestCase):
         self.addCleanup(self.temp_dir.cleanup)
         daily_summary.LOG_DIR = os.path.join(self.temp_dir.name, "private", "daily-summary")
 
+    def test_render_uses_consistent_overall_and_item_statuses(self):
+        cases = [
+            ([(daily_summary.WARN, "warning", "detail")], "注意", "注意", "注意 1"),
+            ([(daily_summary.CRIT, "critical", "detail")], "严重异常", "严重异常", "严重 1"),
+            ([(daily_summary.UNKNOWN, "unknown", "detail")], "未知/未检查", "未知/未检查", "未检查/失败 1"),
+            ([(daily_summary.OK, "ok", "detail")], "正常", "正常", "严重 0"),
+        ]
+        for items, overall_label, item_label, count_label in cases:
+            with self.subTest(overall=overall_label):
+                col = daily_summary.Col()
+                for level, label, detail in items:
+                    col.add(level, label, detail)
+                report, overall = daily_summary.render(col, {})
+                self.assertEqual(daily_summary.LEVEL_CN[overall], overall_label)
+                self.assertIn("总体：", report)
+                self.assertIn(item_label, report)
+                self.assertIn(count_label, report)
+        self.assertEqual(daily_summary.Col().worst(), daily_summary.OK)
+
+    def test_long_report_is_only_truncated_for_wecom(self):
+        full_report = "报告头\n" + ("异常详情-" * 1200)
+        outbound = daily_summary.limit_wecom_message(full_report)
+
+        self.assertGreater(len(full_report.encode("utf-8")), daily_summary.WECOM_MAX_BYTES)
+        self.assertLessEqual(len(outbound.encode("utf-8")), daily_summary.WECOM_MAX_BYTES)
+        self.assertIn("企业微信消息已截断", outbound)
+        day_path, latest_path = daily_summary.write_log(
+            full_report, daily_summary.WARN, "SENT"
+        )
+        saved = Path(latest_path).read_text(encoding="utf-8")
+        daily = Path(day_path).read_text(encoding="utf-8")
+        self.assertEqual(saved, full_report + "\n")
+        self.assertIn(full_report, daily)
+        self.assertNotIn("企业微信消息已截断", saved)
+
+    def test_normal_wecom_message_is_unchanged(self):
+        report = "短报告内容"
+        self.assertEqual(daily_summary.limit_wecom_message(report), report)
+
+    def test_send_limits_payload_but_logs_full_report(self):
+        full_report = "完整报告\n" + ("详细巡检项-" * 1000)
+        key_file = os.path.join(self.temp_dir.name, "wecom.key")
+        Path(key_file).write_text("test-key", encoding="utf-8")
+        payloads = []
+        collectors = {
+            "collect_host": {}, "collect_mem": {}, "collect_temps": {},
+            "collect_disk_space": [], "collect_beszel_db": {},
+            "collect_services": ([], "unknown"),
+            "collect_containers": ([], None), "collect_root_patrol": None,
+        }
+        with contextlib.ExitStack() as stack:
+            for name, value in collectors.items():
+                stack.enter_context(mock.patch.object(daily_summary, name, return_value=value))
+            stack.enter_context(mock.patch.object(daily_summary, "evaluate"))
+            stack.enter_context(mock.patch.object(
+                daily_summary, "render", return_value=(full_report, daily_summary.WARN)
+            ))
+            stack.enter_context(mock.patch.object(daily_summary, "KEY_FILE", key_file))
+            stack.enter_context(mock.patch.object(daily_summary, "load_key", return_value="test-key"))
+            stack.enter_context(mock.patch.object(
+                daily_summary, "send_wecom",
+                side_effect=lambda key, payload: payloads.append(payload) or {"errcode": 0, "errmsg": "ok"},
+            ))
+            stack.enter_context(mock.patch.object(sys, "argv", [str(SCRIPT), "--send"]))
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = daily_summary.main()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(payloads), 1)
+        self.assertLessEqual(len(payloads[0].encode("utf-8")), daily_summary.WECOM_MAX_BYTES)
+        self.assertIn("企业微信消息已截断", payloads[0])
+        self.assertEqual(
+            Path(daily_summary.LOG_DIR, "latest.md").read_text(encoding="utf-8"),
+            full_report + "\n",
+        )
+
+    def test_invalid_key_is_logged_without_sending(self):
+        full_report = "完整但未发送的报告"
+        key_file = os.path.join(self.temp_dir.name, "wecom.key")
+        Path(key_file).write_text("invalid-test-key", encoding="utf-8")
+        collectors = {
+            "collect_host": {}, "collect_mem": {}, "collect_temps": {},
+            "collect_disk_space": [], "collect_beszel_db": {},
+            "collect_services": ([], "unknown"),
+            "collect_containers": ([], None), "collect_root_patrol": None,
+        }
+        with contextlib.ExitStack() as stack:
+            for name, value in collectors.items():
+                stack.enter_context(mock.patch.object(daily_summary, name, return_value=value))
+            stack.enter_context(mock.patch.object(daily_summary, "evaluate"))
+            stack.enter_context(mock.patch.object(
+                daily_summary, "render", return_value=(full_report, daily_summary.OK)
+            ))
+            stack.enter_context(mock.patch.object(daily_summary, "KEY_FILE", key_file))
+            stack.enter_context(mock.patch.object(
+                daily_summary, "load_key", side_effect=SystemExit("permission detail")
+            ))
+            send_mock = stack.enter_context(mock.patch.object(daily_summary, "send_wecom"))
+            stack.enter_context(mock.patch.object(sys, "argv", [str(SCRIPT), "--send"]))
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                rc = daily_summary.main()
+
+        self.assertEqual(rc, 1)
+        send_mock.assert_not_called()
+        log_text = Path(daily_summary.LOG_DIR, "latest.md").read_text(encoding="utf-8")
+        day_text = next(Path(daily_summary.LOG_DIR).glob("*.log")).read_text(encoding="utf-8")
+        self.assertEqual(log_text, full_report + "\n")
+        self.assertIn("FAILED: WeCom key validation (SystemExit)", day_text)
+        self.assertNotIn("permission detail", output.getvalue())
+
     def test_parse_beszel_timestamps_without_python37_api(self):
         utc = daily_summary.parse_timestamp("2024-01-02T03:04:05Z")
         offset = daily_summary.parse_timestamp("2024-01-02T11:04:05.123456789+08:00")

@@ -93,6 +93,29 @@ set +a
 
 没有配置文件时不要执行上述加载命令；未设置的可选变量由程序使用默认值。
 
+### 企业微信机器人通知（完全可选）
+
+通知不会因下载项目而自动可用。只有在自己的企业微信环境中创建群机器人并从机器人设置中取得 Webhook key 后，才能发送。请不要把真实 key 粘贴到聊天、工单或代码仓库；拥有 key 的人可以向对应群发送消息。
+
+key 文件固定为 `$HOME/.config/asus-daily/wecom.key`，内容只能是 key 本身，不能是完整 Webhook URL。以下在 Debian 普通用户 Bash 终端中执行，不需要 `sudo`。`read -s` 会隐藏输入；输入仅写入本机文件，不显示在终端：
+
+```bash
+umask 077
+mkdir -p "$HOME/.config/asus-daily"
+read -r -s -p "粘贴企业微信机器人 key: " WECOM_KEY
+printf '\n'
+printf '%s' "$WECOM_KEY" > "$HOME/.config/asus-daily/wecom.key"
+unset WECOM_KEY
+chmod 600 "$HOME/.config/asus-daily/wecom.key"
+stat -c 'owner=%U mode=%a path=%n' "$HOME/.config/asus-daily/wecom.key"
+```
+
+输出中的 owner 必须是运行脚本的当前用户，mode 必须为 `600`（代码也接受 `400`）；目录由 `umask 077` 创建，只有当前用户可访问。错误属主或权限会被拒绝。不要用 `sudo` 创建文件，否则属主可能错误。若 key 已存在，不要重复覆盖，先核对 `stat` 输出。
+
+`python3 scripts/asus-daily-summary.py --dry-run` 是不发送的检查方式：它不读取 key 文件，也不调用企业微信接口。只有你确认愿意向真实群聊发送时，才在 Debian 项目根目录运行 `python3 scripts/asus-daily-summary.py --send`；有效 key 下的这条命令、手动启动下文的 systemd service，及 timer 到时执行都会发送真实消息。超长时仅发送内容会被截断，本机日志仍保存完整报告。
+
+行为按代码区分：key 文件不存在时 `--send` 记录 `SKIPPED` 和完整报告并以 0 退出；文件属主/权限/内容不合要求时拒绝发送、记录校验失败和完整报告并非零退出；网络异常返回 1 并记录完整报告；企业微信返回非零 `errcode` 时返回 2 并记录完整报告；`errcode=0` 表示接口报告成功并记录完整报告。网络错误只记录异常类型以避免把 URL 中的 key 写入日志。即使接口返回成功，也应按自己的企业微信设置确认消息到达。key 不能提交到 GitHub，因为公开后任何人都可能使用它向群里发消息；也不要发到聊天窗口，因为聊天记录和转发可能扩大泄露范围。
+
 ## C. 第一次安全运行：只生成，不发送
 
 下面命令在 Debian 9.8 终端运行，不需要 `sudo`。项目应位于 `$HOME/linux-server-daily-report`；否则将 `cd` 命令改成你的实际项目根目录。
@@ -190,7 +213,7 @@ sudo journalctl -u old-asus-auto-check.service --since today --no-pager
 
 - 报告生成成功：命令退出码为 0，并打印两个保存路径；可以用 `cat "$HOME/asus-logs/daily-summary/latest.md"` 查看。
 - 巡检结果正常：每个相关数据源可读，检查项达到脚本阈值。报告本身成功生成不代表这一点。
-- `正常` 表示对应检查有数据且达到阈值；`注意/异常`、`严重` 表示代码规则命中需要关注的状态；`未知/未检查` 表示缺配置、无权限、依赖不存在、数据过期或报告缺失。
+- `正常` 表示对应检查有数据且达到阈值；`注意` 表示有告警但没有达到严重级别；`严重异常` 表示命中严重规则；`未知/未检查` 表示缺配置、无权限、依赖不存在、数据过期或报告缺失。总体状态按严重异常、注意、未知/未检查、正常的优先级汇总，并同时列出各类计数；未知不会算作正常。
 - 没有 Beszel DB、`BESZEL_SYSTEM_ID`、Docker 权限或当天 root 报告时，相关项目可能是未知。未知不能自动解释成机器坏了，也不能解释成机器健康。
 - 日志保存失败时，报告文字仍可能已打印到终端，但不能认为文件已保存；根据 `REPORT_SAVE_ERROR` 的异常类型检查目录权限和剩余磁盘空间。
 
@@ -217,6 +240,10 @@ sudo journalctl -u old-asus-auto-check.service --since today --no-pager
 ## G. 每天 20:00 运行（可选 user-level timer）
 
 当前 timer 模板默认每天 **08:02** 本地时间运行，**不是 20:00**。要改成每天晚上 8 点，需要复制单元、编辑 `OnCalendar` 并由当前普通用户启用。此 timer 只运行 Python 日报，不等于已有系统级每日 08:00 root 巡检。不要在第一次 dry-run 前启用。
+
+启用前先确认目标机使用 systemd、当前用户有可用的 user manager 和用户总线（下列 `systemctl --user` 命令能连接），项目确实位于 service 中的 `$HOME/linux-server-daily-report` 路径，且你已经成功 dry-run。用户 manager 通常随登录会话运行；若用户退出后会话结束，timer 可能停止。`loginctl show-user "$USER" -p Linger` 显示 `Linger=yes` 时，manager 可在无登录会话时继续运行；启用 linger 会改变用户服务生命周期，应由管理员按需评估，通常需要管理员权限，不是本指南自动执行的步骤。
+
+模板的 `Persistent=false` 表示 timer 停止期间错过的触发时间不会在 manager 恢复时补跑；它只等待未来的下一次日历时间。`EnvironmentFile=-%h/...` 中前导 `-` 表示配置文件不存在时 systemd 仍启动 service，未配置的 Beszel 项目会显示未知；文件存在时按该文件提供变量。部署前核对其中不含占位 system ID。**service 的 ExecStart 使用 `--send`：有效 key 存在时，手动启动 service 或定时触发都会向真实群聊发送消息。**
 
 ### 1. 先完成配置并验证手动运行
 
@@ -283,7 +310,15 @@ systemctl --user status asus-daily-summary.timer asus-daily-summary.service
 systemctl --user enable --now asus-daily-summary.timer
 ```
 
-这会启用并启动 timer，不会立即运行 service。手动触发 service 的命令如下；再次提醒，有密钥时会真实发送：
+这会启用并启动 timer，不会立即运行 service。随后确认它确实处于启用状态，并查看 `NEXT`（下一次）和 `LAST`（最近一次）触发时间：
+
+```bash
+systemctl --user is-enabled asus-daily-summary.timer
+systemctl --user list-timers --all asus-daily-summary.timer
+systemctl --user status asus-daily-summary.timer
+```
+
+首次启用后 `LAST` 为空是正常的，尚未触发过；service 的执行结果需在手动触发或 timer 到时后查看。手动触发 service 的命令如下；再次提醒，有密钥时会真实发送：
 
 ```bash
 systemctl --user start asus-daily-summary.service
@@ -312,6 +347,12 @@ systemctl --user daemon-reload
 
 ## 验证边界
 
-此前和本次可执行的本地检查包括：Python 编译、5 项单元测试、Python 3.5 语法特性模式下的静态语法解析、隔离 HOME 下的 WSL CLI dry-run（检查文件生成及权限）、以及 WSL Ubuntu 24.04 上的 systemd unit 静态检查。WSL dry-run 读写的是 WSL 自身的临时环境，不是 Debian 9.8 服务器。
+此前和本次可执行的本地检查包括：Python 编译、10 项单元测试、Python 3.5 语法特性模式下的静态语法解析、隔离 HOME 下的 WSL CLI dry-run（检查文件生成及权限）、以及 WSL Ubuntu 24.04 上的 systemd unit 静态检查。WSL dry-run 读写的是 WSL 自身的临时环境，不是 Debian 9.8 服务器。
 
 **本次没有 Debian GNU/Linux 9.8 实机或虚拟机**，因此 Python 3.5 运行兼容性、Stretch systemd 指令兼容性及下列真实集成未完成端到端验证：Beszel schema/权限、Docker daemon、SMART 上报、root 巡检报告、journald 权限、user-level timer 实际触发、企业微信网络和消息发送。请在目标机先手动 dry-run，再自行按 G 节逐步启用；不要把 WSL 测试或静态检查当成 Debian 9.8 验收。
+
+## AI 辅助开发说明
+
+开发过程中使用 AI 编程助手协助梳理需求和代码结构、检查 Bash 巡检脚本的发布边界、编写与修改 Python 代码、处理 Python 版本兼容性、分析问题、设计和补充自动化测试，以及整理安装配置步骤、README 和故障排查内容。未经确认的生产 Bash 脚本没有因此被纳入公开仓库。AI 是提高开发与文档工作的辅助工具；项目维护者提供运维背景和目标、确定需求、审阅并选择修改、核对可执行的检查结果，并负责是否发布的决定。项目不是由 AI 自主决定需求或独立验证上线。
+
+AI 提供的代码、命令和说明不默认正确，仍需代码审查、静态检查、自动化测试，并在适用环境进行实际验证。本项目已有的本地检查包括 Python 编译、单元测试、Python 3.5 语法模式静态解析、隔离 HOME 下的 WSL CLI dry-run 和文件权限检查、Bash 命令块语法检查，以及 WSL Ubuntu 24.04 上的 systemd 单元静态检查。这些结果只证明相应检查在本机/WSL 环境通过；Debian GNU/Linux 9.8 未在真实机器或虚拟机验证。Beszel、Docker、SMART、root 巡检报告、journald 权限、timer 实际触发和企业微信通知均未完成端到端验证。测试环境与限制详见本节前的“验证边界”。
