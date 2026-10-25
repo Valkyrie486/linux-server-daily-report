@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily Linux server inspection summary timer
+
+[Timer]
+# Runs at 08:02 in the server's local time, shortly after an 08:00 patrol.
+# Adjust this schedule to match your patrol time and server time zone.
+OnCalendar=*-*-* 08:02:00
+AccuracySec=30s
+Persistent=false
+Unit=asus-daily-summary.service
+
+[Install]
+WantedBy=timers.target

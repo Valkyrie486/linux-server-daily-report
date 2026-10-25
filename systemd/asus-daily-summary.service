@@ -1,0 +1,26 @@
+[Unit]
+Description=Linux server daily inspection summary to WeCom
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Optional BESZEL_SYSTEM_ID, BESZEL_URL and BESZEL_DB settings.
+EnvironmentFile=-%h/.config/asus-daily/asus-daily-summary.env
+# Assumes the repository is at ~/linux-server-daily-report; adjust if needed.
+ExecStart=/usr/bin/python3 %h/linux-server-daily-report/scripts/asus-daily-summary.py --send
+TimeoutStartSec=3min
+Nice=10
+UMask=0077
+
+# Least-privilege hardening for a systemd --user service.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/asus-logs/daily-summary
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native

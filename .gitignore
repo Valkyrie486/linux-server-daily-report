@@ -1,0 +1,28 @@
+# Secrets and local credentials
+*.key
+*.token
+.env
+.env.*
+!.env.example
+
+# Runtime logs, reports, databases, and local deployment copies
+*.log
+*.db
+*.sqlite
+*.sqlite3
+logs/
+asus-logs/
+daily-summary/
+reports/
+edit-me.sh
+linux-server-daily-report-review.zip
+work/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Windows and macOS metadata
+Thumbs.db
+.DS_Store
+scripts/inspect.sh
