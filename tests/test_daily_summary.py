@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import timezone
 from pathlib import Path
 from unittest import mock
 
@@ -22,6 +23,17 @@ class DailySummaryDryRunTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
         daily_summary.LOG_DIR = os.path.join(self.temp_dir.name, "private", "daily-summary")
+
+    def test_parse_beszel_timestamps_without_python37_api(self):
+        utc = daily_summary.parse_timestamp("2024-01-02T03:04:05Z")
+        offset = daily_summary.parse_timestamp("2024-01-02T11:04:05.123456789+08:00")
+        naive = daily_summary.parse_timestamp("2024-01-02 03:04:05")
+
+        self.assertEqual(utc.tzinfo, timezone.utc)
+        self.assertEqual(offset.astimezone(timezone.utc), utc.replace(microsecond=123456))
+        self.assertEqual(naive.tzinfo, timezone.utc)
+        with self.assertRaises(ValueError):
+            daily_summary.parse_timestamp("not-a-timestamp")
 
     def test_write_log_marks_dry_run_and_uses_private_paths(self):
         with mock.patch.object(daily_summary, "run", return_value=(0, "", "")):
@@ -130,8 +142,9 @@ class DailySummaryDryRunTests(unittest.TestCase):
         env["HOME"] = str(isolated_home)
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--dry-run"],
-            capture_output=True,
-            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
             env=env,
             timeout=90,
         )

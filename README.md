@@ -1,49 +1,78 @@
 # Linux Server Daily Report
 
-面向 Linux 家庭服务器的健康日报脚本：用 Python 采集主机状态，生成中文报告；配置企业微信机器人后，可选择发送报告。它是服务器运维项目，不是安装在 Windows 上即可运行的桌面软件。
+面向 **Debian GNU/Linux 9.8（Stretch）家庭服务器**的 Python 健康日报。脚本采集 Linux 状态并生成中文摘要；企业微信通知和用户级 systemd timer 都是需要用户自行配置的可选功能。
 
-## A. 这是什么，适用于谁
+> 本项目的目标环境是 Debian 9.8。源码已按 Python 3.5 标准库接口做兼容处理，但本次没有 Debian 9.8 实机可供验证。Debian Stretch 的 Python 3 包为 Python 3.5 系列；请在目标机运行 `python3 --version` 确认。已在 WSL Ubuntu 24.04 运行的测试仅代表该测试环境，不能证明 Debian 9.8 上兼容。
 
-项目适合想学习 Linux 运维、Python 状态采集和 systemd 用户级定时任务的人。公开文件包含 Python 日报和可选的 `systemd --user` 模板。**仓库不包含可直接运行的 Bash 巡检脚本**；审阅过的本地主机专用 Bash 草稿含特定挂载点、服务和容器基线，因此没有纳入发布。部署副本和服务器专属代码均不在下载内容中。
+Debian 官方 Stretch 页面说明该版本已停止安全更新；继续使用前应由系统管理员评估系统维护和暴露面：[Debian Stretch 发布信息](https://www.debian.org/releases/stretch/)。
 
-请区分运行环境：
+## A. 获取项目和适用环境
 
-- **Windows 原生 PowerShell**：可查看、编辑项目，但不能直接运行脚本中的 Linux `/proc`、`systemctl`、`journalctl` 等采集逻辑。不要在 PowerShell 输入 Linux 命令。
-- **WSL**：可以在 WSL 的 Linux shell 中运行 Python 脚本。WSL 看到的是 WSL 自身的 Linux 环境；它不自动等于另一台 Linux 服务器，也不一定有 systemd、Docker、Beszel 数据库或服务器报告。
-- **Linux 主机**：是目标运行环境。第一次只运行 `--dry-run`；脚本会采集状态并写本用户的报告文件，但不会发送企业微信消息或启用定时器。
+此次检查的本地 Git 仓库没有配置 `origin`，也没有已验证的公开下载 URL。因此目前不能提供可用的 `git clone` 地址；请从项目维护者处取得完整项目文件夹或压缩包。不要把下面的占位文本当作真实仓库地址。
 
-本工作区已在 WSL Ubuntu 24.04 中运行 Python 编译、3 项模拟单元测试、一次隔离 HOME 的手动 dry-run，并用 `systemd-analyze verify` 检查 unit 格式。dry-run 实际读取的是 WSL 自身状态，不是服务器状态；这些验证不等于真实服务器端到端验收。具体范围见文末“验证范围”。
+将取得的完整文件夹放到 Debian 用户主目录，并命名为 `linux-server-daily-report`。目录结构至少应有：
 
-## B. 首次执行前的准备
+```text
+linux-server-daily-report/
+├── README.md
+├── scripts/asus-daily-summary.py
+├── systemd/asus-daily-summary.service
+├── systemd/asus-daily-summary.timer
+└── systemd/asus-daily-summary.env.example
+```
 
-### 必需
+本项目不是 Windows 桌面应用。**所有 Linux 命令都在 Debian 9.8 终端执行**，不要双击 Python 文件，也不要在 Windows 原生 PowerShell 直接运行 Linux 采集脚本。WSL Ubuntu 24.04 只用于本地开发测试，不是本项目本次声明支持的目标系统。
 
-- 一个 Linux shell：Linux 主机终端，或 WSL 发行版终端。需要能进入项目根目录（该目录中应有 `README.md`、`scripts/` 和 `systemd/`）。
-- Python 3。脚本使用 Python 标准库，不需要通过 pip 安装第三方 Python 包。
-- 当前用户对自己的主目录有写权限。日报会保存到该用户的 `~/asus-logs/daily-summary/`。
+本仓库不包含 Bash 巡检脚本、生产 systemd 单元或生产报告生成器。已知服务器上的系统级 `old-asus-auto-check` 每日巡检是独立部署；克隆或解压本项目不会安装或运行它。
 
-### 可选数据源和功能
+## B. 首次使用前：软件、权限和数据源
 
-没有这些组件也可以运行。对应检查会显示“未知/未检查”，不能把未知当成正常：
+### 必需条件
 
-| 组件/配置 | 用途 | 默认及缺失时的表现 |
+- Debian GNU/Linux 9.8 shell 和完整项目目录。
+- Python **3.5 或更高版本**。脚本只用 Python 标准库，不要求 `pip` 或额外 Python 包。Debian Stretch 的 `python3` 包属于 Python 3.5 系列（见 [Debian Stretch Python 源码包](https://sources.debian.org/src/python3.5/)）。为兼容 3.5，源码已将 Python 3.7 才有的 `subprocess.run(capture_output=..., text=...)` 和 `datetime.fromisoformat()` 分别替换为较早可用的 subprocess 参数和本地 ISO 时间解析；目标机仍需实测。
+- 运行脚本的普通用户可写自己的 `$HOME`。不需要 root；不要用 `sudo` 跑个人日报，否则日志会写入 root 的主目录并可能改变文件属主。
+
+检查终端和 Python：
+
+```bash
+cd "$HOME/linux-server-daily-report"
+pwd
+command -v python3
+python3 --version
+```
+
+`pwd` 应显示项目根目录；`command -v` 应显示 Python 路径；版本应为 `3.5` 或更高。若命令找不到，在 Debian 上可由管理员通过已配置的 Debian 官方软件源安装 `python3`：
+
+```bash
+sudo apt-get update
+sudo apt-get install python3
+```
+
+Stretch 已归档；如果官方源不可用，不要运行来路不明的安装脚本、不要覆盖 `/usr/bin/python` 或系统 Python 链接。让系统管理员使用 Debian 官方归档源处理，随后重新检查 `python3 --version`。若低于 3.5，本脚本不支持该解释器；不要继续运行。
+
+### 完整主机信息依赖
+
+Python 能启动不等于所有巡检数据都能采集。脚本读取 `/proc`、`/sys`，并调用系统命令。按实际代码，信息来源如下：
+
+| 依赖/配置 | 用途 | 缺失或不可读时 |
 |---|---|---|
-| Beszel SQLite 数据库 | 读取 Beszel 主机状态、告警和 SMART 设备数据 | 默认 `~/services/beszel/data/data.db`，以 SQLite 只读模式打开；文件不存在或无权限时对应项目为未知 |
-| `BESZEL_SYSTEM_ID` | 在数据库中匹配目标主机及 SMART 记录 | 默认空；未配置时主机匹配和 SMART 会显示未知，即使数据库可读 |
-| Docker CLI 和可访问的 Docker daemon | 检查运行中及已退出的容器 | 不可用时显示采集失败/未知；退出容器会报告异常 |
-| `systemctl`、`journalctl` | 读取服务状态及最近 24 小时日志 | 不可用或无权限时相关项目可能未知；WSL 中也可能没有 systemd/journal |
-| SMART 数据 | 读取 Beszel 数据库里的设备数据 | 本脚本不直接运行 `smartctl`；缺失、未配置或超过 30 分钟未更新时标为未知 |
-| root 巡检报告 | 在日报中引用独立 root 巡检结果 | 不是本仓库生成的文件；找不到符合格式的当天报告时标为未知 |
-| 企业微信机器人和密钥文件 | 用 `--send` 主动发送消息 | 全部可选；`--dry-run` 不读取密钥，也不发送 |
-| systemd 用户级服务/计时器 | 自动运行 Python 日报 | 可选；仓库中的 timer 默认未启用，也不会自行安装 |
+| Linux `/proc`、`/sys`、`df`、`uptime` | 负载、内存、温度和文件系统容量 | 相应项目未知/失败；磁盘检查路径固定为 `/`、`/home`、`/boot`、`/mnt/toshiba` |
+| `systemctl`（完整服务状态需要） | 读取 `sshd`、`smb`、`docker`、`firewalld`、`NetworkManager` 和 `nmb` 状态 | 命令缺失会使状态不完整；固定名单中非 active 的项目会按代码计为严重，目标机未安装的服务也可能如此 |
+| `journalctl`（完整日志检查需要） | 最近 24 小时内核和系统错误日志 | 无 journal 或权限不足会显示未知/失败 |
+| Beszel SQLite 数据库 | 主机状态、告警、SMART 记录 | 默认路径 `~/services/beszel/data/data.db`；缺失/不可读时对应项目未知。数据库以只读模式打开 |
+| `BESZEL_SYSTEM_ID` | 在数据库中匹配目标主机和 SMART | 默认未设置；空值时主机及 SMART 匹配未知，即使数据库存在 |
+| Docker CLI 和 daemon 权限 | 检查全部容器，包括已退出容器 | 命令/daemon 不可用时显示未知；退出容器或 unhealthy 容器会显示异常 |
+| Beszel SMART 上报 | 读取 `/dev/sda` 和 `/dev/sdb` 的数据库记录 | 脚本不直接运行 `smartctl`；设备未上报、ID 不匹配或数据超过 30 分钟会显示未知 |
+| 既有 root 巡检报告 | 在日报中汇总独立的每日 root 巡检结果 | 报告不由本仓库生成；当天文件缺失、命名/内容不匹配或不可读时显示未知 |
+| 企业微信机器人密钥和网络 | `--send` 发送通知 | 可选；未配置密钥时跳过；网络/API 错误时记录发送失败 |
+| systemd user manager | 可选的用户级定时任务 | 没有运行中的 user manager 时无法安装/触发 timer |
 
-当前 Python 代码会将 `sshd`、`smb`、`docker`、`firewalld`、`NetworkManager` 这几个服务的非 active 状态计为严重项。因此，在 WSL 或未安装这些服务的发行版上可能出现严重状态；它反映的是当前代码的固定服务基线，不等于主机整体故障。`nmb` 是备注项。Docker 不可访问、Beszel 数据库缺失、未配置系统 ID、SMART 数据过期或巡检报告缺失则会显示未知/未检查。
+脚本还固定检查上述 systemd 服务名单和磁盘/设备基线。Debian 9.8 的实际服务名称、挂载布局或设备名若不同，报告可能出现严重、未知或不匹配；这些状态既不等于自动确认系统故障，也不等于检查正常。应先核对报告中具体项目。
 
-磁盘容量目前固定检查 `/`、`/home`、`/boot`、`/mnt/toshiba`；Beszel SMART 汇总固定匹配 `/dev/sda` 和 `/dev/sdb`。不同布局可能在这些项上得到未知或不匹配。将报告用于另一台主机前，应先理解这些固定基线，不能把所有严重/未知直接当成该主机故障或健康结论。
+### Beszel 配置（可选）
 
-程序读取的环境变量：`BESZEL_DB`（数据库路径）、`BESZEL_SYSTEM_ID`（主机 ID）、`BESZEL_URL`（仅作为报告链接）、`ROOT_PATROL_DIRS`（巡检报告目录，Linux 下用冒号分隔）。它们不是 Python 自动读取 `.env`；用户级 systemd service 才会通过 `EnvironmentFile` 读取示例路径中的配置文件。
-
-如需配置 Beszel，可在 Linux shell 中执行以下命令；它会创建配置目录并将示例复制到用户配置目录。用编辑器把占位 ID 改成自己的值；不知道 ID 时删除或注释 `BESZEL_SYSTEM_ID=replace-with-your-own-system-id` 这一行，不要保留占位字符串。报告会如实显示未知。**不要填写或提交服务器密钥、Webhook URL 或真实日志。**
+只有你确实使用 Beszel 并希望匹配本机数据时才需要设置。示例文件由 systemd service 通过 `EnvironmentFile` 读取；Python 不会自动加载 `.env`。以下命令在项目根目录、Debian 普通用户终端执行，不需要 `sudo`：
 
 ```bash
 mkdir -p "$HOME/.config/asus-daily"
@@ -52,7 +81,9 @@ chmod 600 "$HOME/.config/asus-daily/asus-daily-summary.env"
 nano "$HOME/.config/asus-daily/asus-daily-summary.env"
 ```
 
-如果只做第一次安全运行，可以跳过此配置步骤。手动运行时若希望使用这些配置，在同一个 Linux shell 中加载：
+在文件中将 `BESZEL_SYSTEM_ID=replace-with-your-own-system-id` 替换为自己 Beszel 中的系统 ID。暂时没有 ID 时，删除或注释该占位行；不要保留占位字符串。可选变量：`BESZEL_DB` 覆盖数据库路径，`BESZEL_URL` 只作为报告链接，`ROOT_PATROL_DIRS` 覆盖 root 报告搜索目录（Debian/Linux 用冒号分隔）。不要把密钥、真实 webhook URL、数据库或报告提交进 Git。
+
+如果没有 `nano`，先用系统中已有的文本编辑器；也可以跳过 Beszel 配置进行第一次 dry-run。手动运行要使用配置时，在同一个 Debian shell 中显式加载：
 
 ```bash
 set -a
@@ -60,17 +91,13 @@ set -a
 set +a
 ```
 
-### 如何确认项目目录和用户主目录
+没有配置文件时不要执行上述加载命令；未设置的可选变量由程序使用默认值。
 
-在 Linux shell 中，`pwd` 显示当前目录，`printf '%s\n' "$HOME"` 显示当前用户主目录。`~` 按实际运行程序的 Linux 用户展开；通过用户级 systemd 启动时，使用该 user manager 所属用户的主目录。不要把某个用户的绝对路径复制给另一台主机。
+## C. 第一次安全运行：只生成，不发送
 
-在 Windows 原生 PowerShell 中如需把 Windows 项目目录转换成 WSL 路径，可运行 `wsl.exe wslpath -u 'C:\你的目录\linux-server-daily-report'`，将示例中的路径替换为实际位置；然后在 WSL shell 使用返回的 Linux 路径 `cd`。这条转换命令只用于取得路径，不会运行项目。
+下面命令在 Debian 9.8 终端运行，不需要 `sudo`。项目应位于 `$HOME/linux-server-daily-report`；否则将 `cd` 命令改成你的实际项目根目录。
 
-## C. 第一次安全运行
-
-以下步骤在 **Linux 主机终端或 WSL Linux shell** 中执行，均不需要 `sudo`。前提是已取得项目文件夹；把整个文件夹放在当前 Linux 用户主目录下，并命名为 `linux-server-daily-report`。若项目在其他位置，只需把第一条 `cd` 改成实际的项目根目录。
-
-1. 进入项目目录。预期 `pwd` 以 `/linux-server-daily-report` 结尾；如果 `cd` 提示目录不存在，先找到并进入实际解压/克隆出来的目录，不要继续在错误目录执行。
+1. 确认位置和核心文件：
 
    ```bash
    cd "$HOME/linux-server-daily-report"
@@ -78,46 +105,42 @@ set +a
    test -f scripts/asus-daily-summary.py && echo "项目文件已找到"
    ```
 
-2. 确认 Python 版本。预期显示 `Python 3.x`；如果 `python3` 找不到，按“常见问题”安装系统 Python 3 后重试。
+   预期末行显示“项目文件已找到”。若没有，停止并找到正确的解压/克隆目录；不要在错误目录继续。
 
-   ```bash
-   python3 --version
-   ```
-
-3. 做语法编译检查。成功时没有错误输出并返回 0；它会生成可忽略的 `scripts/__pycache__/` 缓存，不会检查服务器组件。
+2. 编译检查：
 
    ```bash
    python3 -m py_compile scripts/asus-daily-summary.py
    ```
 
-4. 运行无通知的日报测试。该命令**不需要 sudo**，会采集当前 Linux 环境、打印完整报告、保存私有日志，并显示保存路径。它不读取密钥、不调用企业微信发送接口、不安装或启用 timer。首次执行可能由于没有 Beszel、Docker、systemd 或巡检报告而出现未知项，这是预期情况。
+   成功时无错误输出并返回 0；失败时记录完整错误并确认 `python3 --version` 至少为 3.5。此命令会创建被 `.gitignore` 忽略的 `__pycache__`。
+
+3. 生成报告：
 
    ```bash
    python3 scripts/asus-daily-summary.py --dry-run
    ```
 
-   成功标准是：退出码为 0，终端出现 `[dry-run] 不发送`、`报告已保存：.../latest.md` 和 `当日日志：.../YYYY-MM-DD.log`。报告里的“未知”不代表程序执行失败；它表示相应数据源未配置或不可读取。保存失败会输出 `REPORT_SAVE_ERROR` 并返回 3。
+   成功时终端打印完整中文摘要，并出现 `[dry-run] 不发送`、`报告已保存：.../latest.md`、`当日日志：.../YYYY-MM-DD.log`。它不会读取企业微信密钥、调用发送接口、启用 timer 或修改系统服务。它会在自己的日志目录写文件，并尝试清理其中超过 30 天的 `.log`。
 
-**仅当你主动准备真实企业微信机器人密钥并确实要向群里发消息时才运行 `--send`。** 第一次测试不要运行它。无密钥时 `--send` 会写入“跳过”记录并以 0 退出；有密钥时则会尝试发送真实消息。
+   退出码 0 表示报告采集流程和保存完成，不表示所有巡检项正常。缺少 Beszel、Docker、systemd/journal、传感器或 root 报告时出现未知/严重项，第一次测试中可能是预期结果。出现 `REPORT_SAVE_ERROR` 或退出码 3 表示报告保存失败；检查自己主目录权限和磁盘空间。
 
-## D. 报告和日志在哪里
+**首次不要运行 `--send`。** 只有在已经配置真实企业微信机器人密钥且确认愿意向群发送时才使用该参数；有密钥的手动 service 测试也会尝试真实发送。
 
-路径按运行程序的 Linux 用户计算。若 `printf '%s\n' "$HOME"` 输出 `/home/你的用户名`，日志目录就是 `/home/你的用户名/asus-logs/daily-summary/`；若由 root 运行，`~` 会变为 root 的主目录。因此不要用 root 运行个人 Python 日报。
+## D. 报告、日志与执行记录分别在哪里
 
-### 1. 手动 `--dry-run` 输出
+`~` 按运行程序的 Linux 用户展开。先用 `printf '%s\n' "$HOME"` 查看实际主目录；例如若它是 `/home/你的用户名`，Python 日报目录就是 `/home/你的用户名/asus-logs/daily-summary/`。root 运行时路径会变成 `/root/...`，所以 Python 日报应以普通用户运行。
 
-完整报告先打印到当前终端；现在也会同步保存到日报目录。结尾会给出 `latest.md` 和当日日志的确切绝对路径。报告保存失败时终端会显示错误类型和目标目录；报告文本仍已经打印，可按报错检查目录权限和磁盘空间。
+### 1. Python 中文摘要
 
-### 2. Python 日报文件
+`--dry-run` 把完整摘要打印到终端，并同步保存。日志目录由代码中的 `LOG_DIR` 确定：`$HOME/asus-logs/daily-summary/`，目录权限 0700。
 
-实际代码写入：
+- `latest.md`：最近一次报告，每次运行覆盖，权限 0600。
+- `YYYY-MM-DD.log`：按运行当天日期命名，追加每次运行的状态和报告，例如 `2026-10-25.log`；dry-run 记录明确的 `result=DRY RUN (not sent)`，超过 30 天的 `.log` 会尝试清理，权限 0600。
 
-- 日志目录：`$HOME/asus-logs/daily-summary/`，目录权限 0700。
-- 每日追加日志：`YYYY-MM-DD.log`，例如 `2026-10-25.log`；文件权限 0600。每次运行有一条 `result=` 标记，dry-run 明确记录 `DRY RUN (not sent)`。
-- 最新报告：`latest.md`，每次运行覆盖，权限 0600。
-- `.log` 保留：超过 30 天的日志由程序尝试清理；因此该目录不是永久归档。
+报告时间取 Debian 系统本地时钟，但当前代码在标题中固定附加 `Asia/Shanghai` 字样。若目标机时区不是 Asia/Shanghai，这个标签可能与实际本地时区不符；用 `timedatectl` 核对系统时区。timer 也按系统本地时区触发。
 
-在 Linux shell 中查看目录、打开最新报告和查看最近日志：
+查看刚生成的摘要和当天日志（Debian 普通用户终端，无需 sudo）：
 
 ```bash
 ls -la "$HOME/asus-logs/daily-summary"
@@ -125,97 +148,128 @@ cat "$HOME/asus-logs/daily-summary/latest.md"
 tail -n 40 "$HOME/asus-logs/daily-summary/$(date +%F).log"
 ```
 
-### 3. systemd 用户级服务日志
+### 2. systemd service 执行记录
 
-服务标准输出、标准错误以及执行失败状态由 systemd journal 收集。先查看 service 状态，再查看今天的日志：
+这是 systemd 捕获的 service 标准输出、标准错误和退出状态，**不是**上面的摘要文件。查看当前用户的服务状态和最近日志：
 
 ```bash
 systemctl --user status asus-daily-summary.service
 journalctl --user -u asus-daily-summary.service --since today --no-pager
 ```
 
-尚未安装 unit 时，`status` 会显示找不到单元；尚未运行过时，journal 可能没有记录。Python 的 `latest.md`/日期日志与 systemd journal 是两套不同输出。
+unit 尚未安装时会显示找不到单元；service 尚未运行时 journal 没有记录是正常的。Debian 9.8 上需确认 systemd user manager 正在运行；WSL Ubuntu 24.04 的结果不验证 Debian 9.8 的 user manager 行为。
 
-### 4. 独立系统级巡检报告
+### 3. 系统级 root 巡检报告
 
-已知服务器上另有每日 08:00 的系统级 `old-asus-auto-check.service` / `.timer`，此前核实它会生成带时间的报告和历史记录。但生产脚本和服务器部署配置没有包含在本仓库，下载仓库不会安装或生成这份 root 报告。
+这是一项服务器外部的既有生产任务，不是 Python 日报日志，也不是 systemd 的执行日志。已知生产任务每天 08:00 运行；本仓库不含其已核实生产脚本或 system-level unit，也不会生成它的报告。
 
-Python 仅按配置目录查找符合以下命名格式的既有文件：`old-asus-auto-check-YYYYMMDD-*.txt`，或 `history/old-asus-auto-check-YYYY-MM-DD.log`。默认搜索 `~/asus-logs` 和 `/var/log/old-asus-auto-check`；权限不足、路径不同或当天文件不存在时会显示未知。先列出候选文件：
+Python 只在 `ROOT_PATROL_DIRS` 指定目录中读取符合命名和内容格式的既有报告：`old-asus-auto-check-YYYYMMDD-*.txt`，或 `history/old-asus-auto-check-YYYY-MM-DD.log`。默认目录是运行用户的 `~/asus-logs` 和 `/var/log/old-asus-auto-check`。列出候选文件：
 
 ```bash
 find "$HOME/asus-logs" /var/log/old-asus-auto-check -type f \( -name 'old-asus-auto-check-*.txt' -o -name 'old-asus-auto-check-*.log' \) -print 2>/dev/null
 ```
 
-如果找到了文件，可用 `less '/实际找到的/报告文件'` 查看。若 `/var/log` 文件普通用户不可读，不要修改生产权限；请由服务器管理员检查，或在自己的配置中设置一个当前用户可读的 `ROOT_PATROL_DIRS`。查看 systemd 生产任务状态（仅查看，不改变任务）可用：
+查看生产 unit 状态（仅查看，不修改；这两条命令需要 sudo 读取系统级 unit）：
 
 ```bash
 sudo systemctl status old-asus-auto-check.timer old-asus-auto-check.service
 sudo journalctl -u old-asus-auto-check.service --since today --no-pager
 ```
 
-这些命令只适用于已部署该单元的服务器；在 WSL 或其他主机上单元不存在是正常的。
+如果 unit 或报告不存在，说明这台系统没有该任务、目录不同或权限不足；不要把 Python 的未知状态当成 root 巡检已经执行。
 
-## E. 运行成功的判断标准
+## E. 如何判断成功
 
-以下为**格式示例，不是真实服务器结果**；主机数据、时间、计数和路径会随环境变化：
+以下是**示例格式，不是 Debian 服务器实测结果**：
 
 ```text
-## 🖥️ asus 每日巡检摘要
-> 2026-10-25 08:04 CST（Asia/Shanghai）
-> 总体：<font color="comment">未检查/失败</font> ｜ 严重 0 ｜ 注意 0 ｜ 未检查/失败 8
-...
-[dry-run] 不发送；严重=0 注意=0 未知=8；字节=1234
+[dry-run] 不发送；严重=... 注意=... 未知=...；字节=...
 [dry-run] 报告已保存：/home/你的用户名/asus-logs/daily-summary/latest.md
 [dry-run] 当日日志：/home/你的用户名/asus-logs/daily-summary/2026-10-25.log
 ```
 
-- **命令成功**：`--dry-run` 的退出码为 0，表示采集流程和报告保存完成；它不保证每个数据源都正常。
-- **日报已生成**：输出有两行保存路径；用 `ls -l` 确认文件存在，用 `cat latest.md` 查看内容。
-- **正常**：该检查项有数据且通过脚本阈值。
-- **注意/异常**：发现需人工关注的条件；例如资源阈值、日志或某些设备信号。
-- **严重**：命中脚本定义的严重阈值或异常服务/容器状态。
-- **未知/未检查**：没配置、无权限、组件不存在、数据过期或报告缺失。比如未设置 `BESZEL_SYSTEM_ID` 时，即使数据库能打开，也无法匹配主机；未知不等于正常。
-- **保存失败**：看到 `REPORT_SAVE_ERROR` 或退出码 3，表示报告未能完整保存。按错误类型检查 `$HOME/asus-logs/daily-summary` 的父目录权限、磁盘空间及文件系统只读状态。
-
-程序退出码只表达脚本执行结果。`--dry-run` 可能在报告有严重/未知项时仍以 0 退出，因为它不是自动修复工具，也不是所有组件都配置齐备的证明。
+- 报告生成成功：命令退出码为 0，并打印两个保存路径；可以用 `cat "$HOME/asus-logs/daily-summary/latest.md"` 查看。
+- 巡检结果正常：每个相关数据源可读，检查项达到脚本阈值。报告本身成功生成不代表这一点。
+- `正常` 表示对应检查有数据且达到阈值；`注意/异常`、`严重` 表示代码规则命中需要关注的状态；`未知/未检查` 表示缺配置、无权限、依赖不存在、数据过期或报告缺失。
+- 没有 Beszel DB、`BESZEL_SYSTEM_ID`、Docker 权限或当天 root 报告时，相关项目可能是未知。未知不能自动解释成机器坏了，也不能解释成机器健康。
+- 日志保存失败时，报告文字仍可能已打印到终端，但不能认为文件已保存；根据 `REPORT_SAVE_ERROR` 的异常类型检查目录权限和剩余磁盘空间。
 
 ## F. 常见问题
 
-所有诊断命令在 Linux 主机终端或 WSL shell 运行，除明确标注外不需要 `sudo`。
+除明确标注 `sudo` 外，以下命令均在 Debian 普通用户终端执行。
 
-- **找不到 Python**：运行 `command -v python3`。若无输出，需在 Linux 发行版安装 Python 3；Ubuntu/Debian 可由管理员运行 `sudo apt update && sudo apt install python3`，Rocky/Fedora 可用 `sudo dnf install python3`。安装包会修改本机软件环境，先确认你有权限。
-- **在 Windows 原生 PowerShell 运行失败**：`python scripts/asus-daily-summary.py --dry-run` 即使能启动 Windows Python，也无法提供 `/proc`、Linux systemd 等数据。改在 WSL Linux shell 或 Linux 主机终端运行；PowerShell 只适合查看/编辑文件。
-- **缺少 Linux 系统命令**：运行 `command -v systemctl journalctl docker df uptime`。缺某条命令时，对应项目可能是未知/失败；安装 `systemd`、Docker CLI 或其他系统包取决于发行版，不要为了一次 dry-run 盲目安装。
-- **缺少 Beszel 数据库**：`ls -l "${BESZEL_DB:-$HOME/services/beszel/data/data.db}"`。文件不存在会导致 Beszel/SMART 项未知；没有 Beszel 时可继续手动报告，先接受这些未知项。
-- **无法读取数据库**：`namei -l "${BESZEL_DB:-$HOME/services/beszel/data/data.db}"` 和 `test -r "${BESZEL_DB:-$HOME/services/beszel/data/data.db}"; echo $?`。需要父目录搜索权限和数据库读取权限；脚本只读打开，不要给数据库写权限。
-- **`BESZEL_SYSTEM_ID` 未配置**：运行 `printf '%s\n' "${BESZEL_SYSTEM_ID:-未设置}"`。ID 为空时匹配状态和 SMART 设备未知；按“配置”章节从自己的 Beszel 获取 ID。不要使用他人的真实 ID。
-- **找不到当天 root 巡检报告**：检查目录 `printf '%s\n' "${ROOT_PATROL_DIRS:-默认目录}"` 并运行 D 章节的 `find` 命令。确认文件名日期、目录权限、报告内容格式；它必须来自独立 root 任务，本仓库不会创建它。
-- **Docker 命令不可用**：运行 `command -v docker; docker ps -a`。若命令不存在或 daemon 不可达，日报显示 Docker 未知；若容器已退出，代码会检查全部容器（包括停止的）并报告异常。普通用户访问 Docker socket 通常需要高权限，勿为测试随意加入 `docker` 组。
-- **systemd 服务不存在或失败**：运行 `systemctl --user status asus-daily-summary.service`、`journalctl --user -u asus-daily-summary.service -b --no-pager`。不存在通常表示 unit 未安装或未 `daemon-reload`；失败时核对 `ExecStart` 文件路径、Python 路径、env 文件语法和日志目录权限。若 `systemctl --user` 报无法连接 user bus，当前环境可能没有运行 user manager（常见于未启用 systemd 的 WSL）。
-- **timer 未启用**：运行 `systemctl --user is-enabled asus-daily-summary.timer` 和 `systemctl --user list-timers --all`。`disabled` 表示不会按计划触发；unit 文件存在或安装了都不等于启用。
-- **退出登录后 timer 不再触发**：检查 `loginctl show-user "$USER" -p Linger`。user manager 未运行时，timer 不能触发；若确实要求用户注销后仍运行，需由管理员评估并主动启用 linger（例如 `sudo loginctl enable-linger "$USER"`）。这会改变该 Linux 用户的系统运行策略，不是本项目安装步骤。
-- **企业微信密钥不存在**：`test -e "$HOME/.config/asus-daily/wecom.key"; echo $?`。不存在时 `--send` 会跳过、不发消息，记一条 skip 并退出 0。首次测试用 `--dry-run`。
-- **企业微信密钥权限不正确**：运行 `stat -c '%U %a' "$HOME/.config/asus-daily/wecom.key"`。所有者必须是当前运行用户，权限必须严格为 600 或 400；修正可用 `chmod 600 "$HOME/.config/asus-daily/wecom.key"`。错误时脚本拒绝发送并以非零退出，不会记录本次报告。
-- **报告生成了但不知道在哪**：重新运行 `--dry-run`，看最后的“报告已保存”和“当日日志”绝对路径；或执行 `printf '%s\n' "$HOME/asus-logs/daily-summary/latest.md"`、`ls -la "$HOME/asus-logs/daily-summary"`。不要猜用户名拼路径。
+- **Python 找不到或版本过低**：`command -v python3; python3 --version`。最低 3.5；低于 3.5 时不要运行。通过 Debian 官方包源安装 Python 3；若 Stretch 软件源不可用，交由管理员使用 Debian 官方归档源处理，不要下载第三方安装脚本，也不要改系统 Python 链接。
+- **命令找不到**：`command -v df uptime systemctl journalctl docker find`。缺哪个命令就会影响相应采集：`systemctl`/`journalctl` 可能导致服务/日志未知，`docker` 导致容器未知，`find` 影响过期日志清理。不要把命令缺失误判为服务故障。
+- **配置变量未设置**：`printf 'BESZEL_DB=%s\nBESZEL_SYSTEM_ID=%s\nROOT_PATROL_DIRS=%s\n' "${BESZEL_DB:-默认数据库路径}" "${BESZEL_SYSTEM_ID:-未设置}" "${ROOT_PATROL_DIRS:-默认目录}"`。先确认配置文件已编辑；手动启动需按 B 节显式加载，systemd 启动由 `EnvironmentFile` 加载。
+- **Beszel 数据库不存在或不可读**：`ls -l "${BESZEL_DB:-$HOME/services/beszel/data/data.db}"`、`namei -l "${BESZEL_DB:-$HOME/services/beszel/data/data.db}"`、`test -r "${BESZEL_DB:-$HOME/services/beszel/data/data.db}"; echo $?`。文件不存在或权限不足会显示未知；不要授予写权限，程序以只读 SQLite 打开。
+- **`BESZEL_SYSTEM_ID` 没配或不匹配**：`printf '%s\n' "${BESZEL_SYSTEM_ID:-未设置}"`。空值或错误 ID 会让主机/SMART 匹配未知；到自己的 Beszel 实例核对 ID。
+- **当天 root 巡检报告缺失**：运行 D 节的 `find` 命令，并检查 `ROOT_PATROL_DIRS`、日期、文件名和普通用户读权限。该报告来自独立生产任务，本仓库不会创建它。
+- **Docker 命令不可用或权限不足**：`command -v docker; docker ps -a`。命令不存在、daemon 未运行或 socket 不可访问时，容器项为未知；已退出容器会被检查并报异常。不要为了试运行随意给用户 Docker 高权限。
+- **SMART 没有上报**：确认 Beszel agent/数据库含目标设备、`BESZEL_SYSTEM_ID` 正确、数据更新时间在 30 分钟内。缺失或过期时是未知，不代表磁盘通过 SMART 检查。
+- **目标服务不存在**：报告将固定服务名单中的非 active 状态按严重项计数。先运行 `systemctl is-active sshd smb docker firewalld NetworkManager`；Debian 9.8 未安装/未启用其中某服务可能是部署差异，不应在不了解用途时为消除告警安装或启动服务。
+- **systemd service 不存在/失败**：`systemctl --user status asus-daily-summary.service`、`journalctl --user -u asus-daily-summary.service -b --no-pager`。不存在通常是 unit 未复制或未 `daemon-reload`；失败时核对 service `ExecStart` 文件路径、Python 路径、配置文件权限和日志目录。若提示无法连接 user bus，检查该系统的 user manager；这项尚未在 Debian 9.8 实机验证。
+- **timer 没启用或没按时触发**：`systemctl --user is-enabled asus-daily-summary.timer`、`systemctl --user list-timers --all asus-daily-summary.timer`。看 `NEXT`、`LAST` 和 service journal；退出登录后不触发时再检查 `loginctl show-user "$USER" -p Linger`。只有在你确认需要注销后继续运行时，才让管理员评估 linger 设置。
+- **企业微信密钥不存在**：`test -e "$HOME/.config/asus-daily/wecom.key"; echo $?`。不存在时 `--send` 只记 skip、不发送并返回 0；dry-run 不读取密钥。
+- **密钥权限错误**：`stat -c '%U %a' "$HOME/.config/asus-daily/wecom.key"`。文件属主必须是运行用户，权限必须 600 或 400；可用 `chmod 600 "$HOME/.config/asus-daily/wecom.key"` 修正。错误时脚本拒绝发送并非零退出。
+- **企业微信网络/API 请求失败**：查看 `journalctl --user -u asus-daily-summary.service --since today --no-pager` 或终端 `SEND_ERROR`。脚本只输出异常类型以避免泄露 URL 中的密钥；确认网络、DNS/TLS 和机器人配置后再决定是否手动重试。发送会向真实群聊发消息。
+- **报告生成了但找不到**：运行 `printf '%s\n' "$HOME/asus-logs/daily-summary/latest.md"`、`ls -la "$HOME/asus-logs/daily-summary"`。查看最新报告用 `cat "$HOME/asus-logs/daily-summary/latest.md"`；查看当天日志用 `tail -n 40 "$HOME/asus-logs/daily-summary/$(date +%F).log"`。
 
-## G. 安装、启用与卸载用户级 timer
+## G. 每天 20:00 运行（可选 user-level timer）
 
-`service` 描述一次运行要执行什么；`timer` 描述什么时候触发 service。模板是 `systemd --user` 单元：由安装并启动该用户 manager 的 Linux 账号运行，不是 root 服务。仓库不提供系统级 root unit，也不会自动修改任何服务器服务。timer 默认每天服务器本地时间 **08:02** 触发，`Persistent=false`；错过的触发不补跑。
+当前 timer 模板默认每天 **08:02** 本地时间运行，**不是 20:00**。要改成每天晚上 8 点，需要复制单元、编辑 `OnCalendar` 并由当前普通用户启用。此 timer 只运行 Python 日报，不等于已有系统级每日 08:00 root 巡检。不要在第一次 dry-run 前启用。
 
-先完成配置章节中需要的配置，并手动跑过 `--dry-run`、确认日志路径和报告结果。service 的 `ExecStart` 使用 `--send`：启用 timer 前检查 key 文件；如果 key 已存在，每天会尝试向企业微信群发送真实消息。无 key 时只记录跳过。不要在尚未确认这个行为时启用。
+### 1. 先完成配置并验证手动运行
 
-以下步骤在 Linux shell 执行，不需要 `sudo`。先把 unit 复制到当前用户的 systemd 配置目录并重新加载；**安装不等于启用**：
+确保已按 C 节成功运行 `--dry-run`，且能找到 `$HOME/asus-logs/daily-summary/latest.md`。配置好 Beszel（如需）和 `EnvironmentFile`（可选）。脚本会在创建报告时建立日志目录；也可先显式创建：
 
 ```bash
-mkdir -p "$HOME/.config/systemd/user"
+mkdir -p "$HOME/asus-logs/daily-summary"
+chmod 700 "$HOME/asus-logs/daily-summary"
+```
+
+### 2. 安装并改 timer 时间
+
+以下都在 Debian 9.8 普通用户终端执行，不需要 `sudo`。确保项目位于 `$HOME/linux-server-daily-report`，因为 service 模板的 `ExecStart` 使用这个路径。
+
+```bash
+mkdir -p "$HOME/.config/systemd/user" "$HOME/.config/asus-daily"
 cp systemd/asus-daily-summary.service systemd/asus-daily-summary.timer "$HOME/.config/systemd/user/"
+nano "$HOME/.config/systemd/user/asus-daily-summary.timer"
+```
+
+如果此前已按 B 节配置 Beszel，保留现有 env 文件，不要用示例覆盖。若不使用 Beszel，可以没有该文件；service 的 `EnvironmentFile=-...` 前缀表示文件缺失时不报错。需要添加配置时，按 B 节复制示例、删除 ID 占位值，再编辑并限制权限：
+
+```bash
+nano "$HOME/.config/asus-daily/asus-daily-summary.env"
+chmod 600 "$HOME/.config/asus-daily/asus-daily-summary.env"
+```
+
+在 timer 文件中把这一行：
+
+```ini
+OnCalendar=*-*-* 08:02:00
+```
+
+改成：
+
+```ini
+OnCalendar=*-*-* 20:00:00
+```
+
+该时间按 Debian 主机本地时区解释。保存文件后重新加载用户级 systemd；如果已改 service，也一起重新加载：
+
+```bash
 systemctl --user daemon-reload
 systemd-analyze --user verify "$HOME/.config/systemd/user/asus-daily-summary.service" "$HOME/.config/systemd/user/asus-daily-summary.timer"
 ```
 
-运行前检查 `ExecStart` 指向的 Python 文件确实存在。若项目不在 `~/linux-server-daily-report`，编辑复制到 `~/.config/systemd/user/` 的 service 并改成脚本的绝对路径，然后再次 `daemon-reload`。用户级配置 env 文件位置为 `~/.config/asus-daily/asus-daily-summary.env`；改环境文件供下次新启动读取，无须 reload；改 unit 文件后必须 reload。
+verify 命令不可用或报错时不要继续启用，先根据诊断修正 unit，并确认 Debian 9.8 的 systemd 版本支持这些模板指令。
 
-查看是否启用、下一次触发时间和状态：
+### 3. 查看状态、手动触发和日志
+
+安装 unit 不等于 timer 已启用。启用前先确认 key：unit 的 `ExecStart` 固定带 `--send`；若有效密钥文件已存在，手动 start 或到点触发会向真实企业微信群发消息。没有密钥时 service 只记 skip。
+
+查看 timer 是否启用、下一次触发时间和服务状态：
 
 ```bash
 systemctl --user is-enabled asus-daily-summary.timer
@@ -223,41 +277,41 @@ systemctl --user list-timers --all asus-daily-summary.timer
 systemctl --user status asus-daily-summary.timer asus-daily-summary.service
 ```
 
-只有在已确认环境、日志和真实发送行为后，才由用户自己启用：
+用户确认配置和发送行为后，才执行启用命令：
 
 ```bash
 systemctl --user enable --now asus-daily-summary.timer
 ```
 
-这会立即启动 timer，之后按 08:02 计划触发 service；不会立刻执行一次日报。手动执行一次 service 用 `systemctl --user start asus-daily-summary.service`，但 service 带 `--send`，有 key 就会发真实消息。查看其 stdout/stderr 和失败细节：
+这会启用并启动 timer，不会立即运行 service。手动触发 service 的命令如下；再次提醒，有密钥时会真实发送：
+
+```bash
+systemctl --user start asus-daily-summary.service
+```
+
+查看最近执行的标准输出、错误和退出状态：
 
 ```bash
 journalctl --user -u asus-daily-summary.service --since today --no-pager
 ```
 
-停用只影响当前用户的这个日报 timer，不会触碰系统级生产巡检：
+### 4. 停用
+
+停止并取消当前用户的日报定时器（不影响系统级 root 巡检）：
 
 ```bash
 systemctl --user disable --now asus-daily-summary.timer
 ```
 
-确认不再需要 unit 后，可删除**仅这两个明确文件**并 reload：
+若还要移除 unit，只删除这两个明确的用户级文件，再 reload：
 
 ```bash
 rm -f "$HOME/.config/systemd/user/asus-daily-summary.timer" "$HOME/.config/systemd/user/asus-daily-summary.service"
 systemctl --user daemon-reload
 ```
 
-删除日报或配置前请先检查并备份需要保留的内容；不要删除其他服务文件、root 巡检数据或整个日志目录。
+## 验证边界
 
-## 验证范围
+此前和本次可执行的本地检查包括：Python 编译、5 项单元测试、Python 3.5 语法特性模式下的静态语法解析、隔离 HOME 下的 WSL CLI dry-run（检查文件生成及权限）、以及 WSL Ubuntu 24.04 上的 systemd unit 静态检查。WSL dry-run 读写的是 WSL 自身的临时环境，不是 Debian 9.8 服务器。
 
-本地完成的检查：
-
-- Python 语法编译。
-- `tests/test_daily_summary.py` 的 4 项 WSL/Linux 测试：替代系统采集器验证报告输出和不读取密钥/不发送；检查日志保存失败；并在 Linux 中真实执行一次 CLI dry-run，确认两种报告文件和私有权限。
-- WSL Linux 文件权限测试：日志目录 0700、日报文件 0600。
-- CLI dry-run 在隔离 HOME 中运行，确认报告路径和文件写入；缺少 Beszel、Docker、温度传感器等项目按未知/失败显示。该结果仅代表 WSL 环境。
-- WSL Ubuntu 24.04 `systemd-analyze verify` 检查 service/timer 文件格式；unit 没有安装或启动。
-
-未完成的验证：真实 Linux 服务器上的 Beszel 数据库 schema/权限、Docker daemon 与容器、SMART 上报、root 巡检报告读取、journald 权限、用户级 systemd timer 触发和企业微信发送。不要把本地模拟或 WSL 的结果当成这些端到端验证。
+**本次没有 Debian GNU/Linux 9.8 实机或虚拟机**，因此 Python 3.5 运行兼容性、Stretch systemd 指令兼容性及下列真实集成未完成端到端验证：Beszel schema/权限、Docker daemon、SMART 上报、root 巡检报告、journald 权限、user-level timer 实际触发、企业微信网络和消息发送。请在目标机先手动 dry-run，再自行按 G 节逐步启用；不要把 WSL 测试或静态检查当成 Debian 9.8 验收。

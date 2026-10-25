@@ -37,7 +37,7 @@ import re
 import subprocess
 import sys
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HOME = os.path.expanduser("~")
@@ -70,7 +70,10 @@ LEVEL_CN = {OK: "正常", WARN: "异常", CRIT: "严重", UNKNOWN: "未检查/�
 def run(cmd, timeout=20):
     """run a command, return (rc, stdout, stderr)."""
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True, timeout=timeout,
+        )
         return p.returncode, p.stdout.strip(), p.stderr.strip()
     except Exception as e:  # noqa: BLE001
         return -1, "", "%r" % e
@@ -217,6 +220,34 @@ def _parse_smart_attrs(attrs_json):
     return found
 
 
+def parse_timestamp(value):
+    """Parse Beszel ISO timestamps on Python 3.5, which lacks fromisoformat()."""
+    match = re.match(
+        r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})"
+        r"(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$",
+        (value or "").strip(),
+    )
+    if not match:
+        raise ValueError("invalid ISO timestamp")
+    base, fraction, zone = match.groups()
+    fmt = "%Y-%m-%dT%H:%M:%S" if "T" in base else "%Y-%m-%d %H:%M:%S"
+    if fraction:
+        parsed = datetime.strptime(base + "." + (fraction + "000000")[:6], fmt + ".%f")
+    else:
+        parsed = datetime.strptime(base, fmt)
+
+    if not zone or zone == "Z":
+        return parsed.replace(tzinfo=timezone.utc)
+    offset_match = re.match(r"^([+-])(\d{2}):?(\d{2})$", zone)
+    if not offset_match:
+        raise ValueError("invalid ISO timezone")
+    sign, hours, minutes = offset_match.groups()
+    offset = timedelta(hours=int(hours), minutes=int(minutes))
+    if sign == "-":
+        offset = -offset
+    return parsed.replace(tzinfo=timezone(offset))
+
+
 def collect_beszel_db(col):
     """Read Beszel status, current alerts, and SMART data using read-only SQLite."""
     info = {
@@ -269,10 +300,7 @@ def collect_beszel_db(col):
                     )
                     for name, model, state, temp, hours, updated, attrs in rows:
                         try:
-                            ts_text = (updated or "").replace("Z", "+00:00")
-                            ts = datetime.fromisoformat(ts_text)
-                            if ts.tzinfo is None:
-                                ts = ts.replace(tzinfo=timezone.utc)
+                            ts = parse_timestamp(updated)
                             age_min = (now - ts).total_seconds() / 60.0
                             stale = age_min > SMART_STALE_MIN
                         except Exception:  # noqa: BLE001
