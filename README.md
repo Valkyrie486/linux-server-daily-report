@@ -58,8 +58,8 @@ Python 能启动不等于所有巡检数据都能采集。脚本读取 `/proc`�
 | 依赖/配置 | 用途 | 缺失或不可读时 |
 |---|---|---|
 | Linux `/proc`、`/sys`、`df`、`uptime` | 负载、内存、温度和文件系统容量 | 相应项目未知/失败；磁盘检查路径固定为 `/`、`/home`、`/boot`、`/mnt/toshiba` |
-| `systemctl`（完整服务状态需要） | 读取 `sshd`、`smb`、`docker`、`firewalld`、`NetworkManager` 和 `nmb` 状态 | 命令缺失会使状态不完整；固定名单中非 active 的项目会按代码计为严重，目标机未安装的服务也可能如此 |
-| `journalctl`（完整日志检查需要） | 最近 24 小时内核和系统错误日志 | 无 journal 或权限不足会显示未知/失败 |
+| `systemctl`（完整服务状态需要） | 检查 `sshd`、`smb`、`docker`、`firewalld`、`NetworkManager` 和 `nmb` 状态 | 前五个预设服务中任何一个不是 active 都会产生严重告警，目标机未安装该服务时也可能如此；`nmb` 的 active/inactive 都接受，其他状态产生注意项 |
+| `journalctl`（完整日志检查需要） | 最近 24 小时内核和系统错误日志 | 仅在命令成功且 stderr 无权限提示或其他警告时计数；权限不足、非零退出或读取范围不完整会显示未知/未检查，绝不当作零条错误 |
 | Beszel SQLite 数据库 | 主机状态、告警、SMART 记录 | 默认路径 `~/services/beszel/data/data.db`；缺失/不可读时对应项目未知。数据库以只读模式打开 |
 | `BESZEL_SYSTEM_ID` | 在数据库中匹配目标主机和 SMART | 默认未设置；空值时主机及 SMART 匹配未知，即使数据库存在 |
 | Docker CLI 和 daemon 权限 | 检查全部容器，包括已退出容器 | 命令/daemon 不可用时显示未知；退出容器或 unhealthy 容器会显示异常 |
@@ -68,7 +68,7 @@ Python 能启动不等于所有巡检数据都能采集。脚本读取 `/proc`�
 | 企业微信机器人密钥和网络 | `--send` 发送通知 | 可选；未配置密钥时跳过；网络/API 错误时记录发送失败 |
 | systemd user manager | 可选的用户级定时任务 | 没有运行中的 user manager 时无法安装/触发 timer |
 
-脚本还固定检查上述 systemd 服务名单和磁盘/设备基线。Debian 9.8 的实际服务名称、挂载布局或设备名若不同，报告可能出现严重、未知或不匹配；这些状态既不等于自动确认系统故障，也不等于检查正常。应先核对报告中具体项目。
+脚本还固定检查上述 systemd 服务名单和磁盘/设备基线。前五个固定服务中的缺失/非 active 服务会被计为严重告警；尤其 Debian 9.8 未必使用这些服务名称。`nmb` 是例外：`active` 和 `inactive` 均视为可接受，其他状态计为注意。磁盘挂载布局或设备名若不同，报告也可能出现未知或不匹配。这些状态既不等于自动确认系统故障，也不等于检查正常。应先核对报告中的具体项目，不要仅为消除告警而安装或启动服务。
 
 ### Beszel 配置（可选）
 
@@ -229,7 +229,8 @@ sudo journalctl -u old-asus-auto-check.service --since today --no-pager
 - **当天 root 巡检报告缺失**：运行 D 节的 `find` 命令，并检查 `ROOT_PATROL_DIRS`、日期、文件名和普通用户读权限。该报告来自独立生产任务，本仓库不会创建它。
 - **Docker 命令不可用或权限不足**：`command -v docker; docker ps -a`。命令不存在、daemon 未运行或 socket 不可访问时，容器项为未知；已退出容器会被检查并报异常。不要为了试运行随意给用户 Docker 高权限。
 - **SMART 没有上报**：确认 Beszel agent/数据库含目标设备、`BESZEL_SYSTEM_ID` 正确、数据更新时间在 30 分钟内。缺失或过期时是未知，不代表磁盘通过 SMART 检查。
-- **目标服务不存在**：报告将固定服务名单中的非 active 状态按严重项计数。先运行 `systemctl is-active sshd smb docker firewalld NetworkManager`；Debian 9.8 未安装/未启用其中某服务可能是部署差异，不应在不了解用途时为消除告警安装或启动服务。
+- **journalctl 权限不足或读取不完整**：报告会将对应的 24 小时内核/系统日志项标为未知/未检查，不会将不可见日志当作 0 条错误。可在当前普通用户终端运行 `journalctl --since '24 hours ago' -p err --no-pager` 查看是否显示权限提示，并运行 `id` 查看当前组；程序不会自动使用 sudo 或更改日志访问组。若命令非零退出、stderr 有权限提示或其他警告，必须先由管理员判断是否授权完整读取，再重试。
+- **目标服务不存在**：固定的 `sshd`、`smb`、`docker`、`firewalld`、`NetworkManager` 任一不是 active 都会按严重项计数，未安装也会触发；`nmb` 的 inactive 状态可接受，未知状态为注意。可检查 `systemctl is-active sshd smb docker firewalld NetworkManager nmb`。Debian 9.8 的服务配置可能与该基线不同，不要仅为消除告警而安装或启动服务。
 - **systemd service 不存在/失败**：`systemctl --user status asus-daily-summary.service`、`journalctl --user -u asus-daily-summary.service -b --no-pager`。不存在通常是 unit 未复制或未 `daemon-reload`；失败时核对 service `ExecStart` 文件路径、Python 路径、配置文件权限和日志目录。若提示无法连接 user bus，检查该系统的 user manager；这项尚未在 Debian 9.8 实机验证。
 - **timer 没启用或没按时触发**：`systemctl --user is-enabled asus-daily-summary.timer`、`systemctl --user list-timers --all asus-daily-summary.timer`。看 `NEXT`、`LAST` 和 service journal；退出登录后不触发时再检查 `loginctl show-user "$USER" -p Linger`。只有在你确认需要注销后继续运行时，才让管理员评估 linger 设置。
 - **企业微信密钥不存在**：`test -e "$HOME/.config/asus-daily/wecom.key"; echo $?`。不存在时 `--send` 只记 skip、不发送并返回 0；dry-run 不读取密钥。
@@ -347,7 +348,7 @@ systemctl --user daemon-reload
 
 ## 验证边界
 
-此前和本次可执行的本地检查包括：Python 编译、10 项单元测试、Python 3.5 语法特性模式下的静态语法解析、隔离 HOME 下的 WSL CLI dry-run（检查文件生成及权限）、以及 WSL Ubuntu 24.04 上的 systemd unit 静态检查。WSL dry-run 读写的是 WSL 自身的临时环境，不是 Debian 9.8 服务器。
+此前和本次可执行的本地检查包括：Python 编译、15 项单元测试、Python 3.5 语法特性模式下的静态语法解析、隔离 HOME 下的 WSL CLI dry-run（检查文件生成及权限）、以及 WSL Ubuntu 24.04 上的 systemd unit 静态检查。WSL dry-run 读写的是 WSL 自身的临时环境，不是 Debian 9.8 服务器。
 
 **本次没有 Debian GNU/Linux 9.8 实机或虚拟机**，因此 Python 3.5 运行兼容性、Stretch systemd 指令兼容性及下列真实集成未完成端到端验证：Beszel schema/权限、Docker daemon、SMART 上报、root 巡检报告、journald 权限、user-level timer 实际触发、企业微信网络和消息发送。请在目标机先手动 dry-run，再自行按 G 节逐步启用；不要把 WSL 测试或静态检查当成 Debian 9.8 验收。
 

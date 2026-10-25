@@ -24,6 +24,71 @@ class DailySummaryDryRunTests(unittest.TestCase):
         self.addCleanup(self.temp_dir.cleanup)
         daily_summary.LOG_DIR = os.path.join(self.temp_dir.name, "private", "daily-summary")
 
+    def test_journal_permission_warning_never_counts_as_zero(self):
+        warning = (
+            "Hint: You are currently not seeing messages from other users and the system."
+        )
+        with mock.patch.object(daily_summary, "run", side_effect=[
+            (0, "", warning), (0, "", warning),
+        ]) as run_mock:
+            result = daily_summary.collect_journal_errors()
+
+        self.assertIsNone(result.kernel_count)
+        self.assertIsNone(result.system_count)
+        self.assertEqual(result.kernel_state, daily_summary.JOURNAL_PERMISSION)
+        self.assertEqual(result.system_state, daily_summary.JOURNAL_PERMISSION)
+        self.assertEqual(run_mock.call_count, 2)
+        self.assertTrue(all("-q" not in call[0][0] for call in run_mock.call_args_list))
+
+    def test_journal_nonzero_exit_is_unknown_but_other_complete_scope_counts(self):
+        with mock.patch.object(daily_summary, "run", side_effect=[
+            (1, "", "journalctl command failed"), (0, "", ""),
+        ]):
+            result = daily_summary.collect_journal_errors()
+
+        self.assertIsNone(result.kernel_count)
+        self.assertEqual(result.kernel_state, daily_summary.JOURNAL_FAILED)
+        self.assertEqual(result.system_count, 0)
+        self.assertEqual(result.system_state, daily_summary.JOURNAL_COMPLETE)
+
+    def test_journal_other_stderr_warning_marks_scope_incomplete(self):
+        with mock.patch.object(daily_summary, "run", return_value=(0, "", "Warning: journal files not fully readable")):
+            result = daily_summary.collect_journal_errors()
+
+        self.assertIsNone(result.kernel_count)
+        self.assertIsNone(result.system_count)
+        self.assertEqual(result.kernel_state, daily_summary.JOURNAL_INCOMPLETE)
+        self.assertEqual(result.system_state, daily_summary.JOURNAL_INCOMPLETE)
+
+    def test_journal_complete_empty_reads_count_as_zero(self):
+        with mock.patch.object(daily_summary, "run", return_value=(0, "", "")):
+            result = daily_summary.collect_journal_errors()
+
+        self.assertEqual(result.kernel_count, 0)
+        self.assertEqual(result.system_count, 0)
+        self.assertEqual(result.kernel_state, daily_summary.JOURNAL_COMPLETE)
+        self.assertEqual(result.system_state, daily_summary.JOURNAL_COMPLETE)
+
+    def test_incomplete_journal_read_renders_unknown_items(self):
+        result = daily_summary.JournalResult(
+            None, False, None, 0,
+            daily_summary.JOURNAL_PERMISSION, daily_summary.JOURNAL_INCOMPLETE,
+        )
+        col = daily_summary.Col()
+        with mock.patch.object(daily_summary, "collect_journal_errors", return_value=result):
+            daily_summary.evaluate(
+                {"uptime": "up", "load": None, "cores": 1},
+                {"ok": False}, {"ok": False}, [],
+                {"system_id_missing": True, "ok": False}, [], "inactive",
+                [], None, None, col,
+            )
+
+        items = {label: (level, detail) for level, label, detail in col.items}
+        self.assertEqual(items["24h 内核错误"][0], daily_summary.UNKNOWN)
+        self.assertIn("权限不足", items["24h 内核错误"][1])
+        self.assertEqual(items["24h 系统错误"][0], daily_summary.UNKNOWN)
+        self.assertIn("读取范围不完整", items["24h 系统错误"][1])
+
     def test_render_uses_consistent_overall_and_item_statuses(self):
         cases = [
             ([(daily_summary.WARN, "warning", "detail")], "注意", "注意", "注意 1"),
@@ -185,7 +250,9 @@ class DailySummaryDryRunTests(unittest.TestCase):
             "collect_services": ([], "unknown"),
             "collect_containers": ([], None),
             "collect_root_patrol": None,
-            "collect_journal_errors": (0, False, 0, 0),
+            "collect_journal_errors": daily_summary.JournalResult(
+                0, False, 0, 0, daily_summary.JOURNAL_COMPLETE, daily_summary.JOURNAL_COMPLETE
+            ),
         }
 
         with contextlib.ExitStack() as stack:
@@ -231,7 +298,9 @@ class DailySummaryDryRunTests(unittest.TestCase):
             "collect_services": ([], "unknown"),
             "collect_containers": ([], None),
             "collect_root_patrol": None,
-            "collect_journal_errors": (0, False, 0, 0),
+            "collect_journal_errors": daily_summary.JournalResult(
+                0, False, 0, 0, daily_summary.JOURNAL_COMPLETE, daily_summary.JOURNAL_COMPLETE
+            ),
         }
         with contextlib.ExitStack() as stack:
             for name, value in collectors.items():

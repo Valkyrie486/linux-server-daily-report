@@ -30,6 +30,7 @@ Optional environment variables (keep deployment-specific values out of source):
 """
 
 import argparse
+from collections import namedtuple
 import glob
 import json
 import os
@@ -65,14 +66,22 @@ WECOM_MAX_BYTES = 4000        # WeCom markdown hard limit is 4096; keep margin
 # ---- status levels -------------------------------------------------------
 OK, WARN, CRIT, UNKNOWN = "OK", "WARN", "CRIT", "UNKNOWN"
 LEVEL_CN = {OK: "正常", WARN: "注意", CRIT: "严重异常", UNKNOWN: "未知/未检查"}
+JournalResult = namedtuple(
+    "JournalResult",
+    "kernel_count storage_hit system_count benign_count kernel_state system_state",
+)
+JOURNAL_COMPLETE = "complete"
+JOURNAL_PERMISSION = "permission"
+JOURNAL_FAILED = "failed"
+JOURNAL_INCOMPLETE = "incomplete"
 
 
-def run(cmd, timeout=20):
+def run(cmd, timeout=20, env=None):
     """run a command, return (rc, stdout, stderr)."""
     try:
         p = subprocess.run(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            universal_newlines=True, timeout=timeout,
+            universal_newlines=True, timeout=timeout, env=env,
         )
         return p.returncode, p.stdout.strip(), p.stderr.strip()
     except Exception as e:  # noqa: BLE001
@@ -369,19 +378,43 @@ def collect_containers():
     return rows, None
 
 
+def _journal_read_state(rc, stderr):
+    diagnostic = (stderr or "").lower()
+    permission_markers = (
+        "permission denied", "not seeing messages from other users",
+        "insufficient permissions", "access denied", "operation not permitted",
+    )
+    if any(marker in diagnostic for marker in permission_markers):
+        return JOURNAL_PERMISSION
+    if rc != 0:
+        return JOURNAL_FAILED
+    # journalctl may return success while warning that the caller can only see
+    # part of the system journal. Any remaining stderr also makes completeness
+    # uncertain, so never convert that read into a zero-error result.
+    if diagnostic.strip():
+        return JOURNAL_INCOMPLETE
+    return JOURNAL_COMPLETE
+
+
 def collect_journal_errors():
-    rc, k, _ = run(["journalctl", "-k", "--since", "24 hours ago", "-p", "err",
-                    "--no-pager", "-q", "-o", "cat"], timeout=30)
-    kcount = len([l for l in k.splitlines() if l.strip()]) if rc == 0 else None
+    # Stable diagnostics let us recognize journalctl permission hints even if
+    # the user's interactive locale is not English.
+    journal_env = os.environ.copy()
+    journal_env["LC_ALL"] = "C"
+    rc, k, kerr = run(["journalctl", "-k", "--since", "24 hours ago", "-p", "err",
+                       "--no-pager", "-o", "cat"], timeout=30, env=journal_env)
+    kstate = _journal_read_state(rc, kerr)
+    kcount = len([l for l in k.splitlines() if l.strip()]) if kstate == JOURNAL_COMPLETE else None
     storage_hit = False
     if kcount:
         storage_hit = bool(re.search(
             r"I/O error|Buffer I/O|EXT4-fs error|XFS.*error|uncorrectable|"
             r"blk_update_request|ata[0-9].*error", k, re.I))
-    rc2, s, _ = run(["journalctl", "--since", "24 hours ago", "-p", "err",
-                     "--no-pager", "-q", "-o", "cat"], timeout=30)
-    if rc2 != 0:
-        return kcount, storage_hit, None, 0
+    rc2, s, serr = run(["journalctl", "--since", "24 hours ago", "-p", "err",
+                        "--no-pager", "-o", "cat"], timeout=30, env=journal_env)
+    sstate = _journal_read_state(rc2, serr)
+    if sstate != JOURNAL_COMPLETE:
+        return JournalResult(kcount, storage_hit, None, 0, kstate, sstate)
     sys_lines = [l for l in s.splitlines() if l.strip()]
     # Benign noise: non-interactive `sudo -n` that is refused for lack of a
     # password is logged at LOG_ERR but is an expected authorization refusal,
@@ -389,7 +422,7 @@ def collect_journal_errors():
     benign = re.compile(r"a password is required")
     benign_n = sum(1 for l in sys_lines if benign.search(l))
     scount = len(sys_lines) - benign_n
-    return kcount, storage_hit, scount, benign_n
+    return JournalResult(kcount, storage_hit, scount, benign_n, kstate, sstate)
 
 
 def _parse_patrol_text(txt):
@@ -556,9 +589,17 @@ def evaluate(host, mem, temps, disks, db, svcs, nmb, containers, cerr, rootp, co
             col.add(WARN, "容器重启 " + c["name"], "restarts=%s" % c["restarts"])
 
     # journal
-    kcount, storage_hit, scount, benign_n = collect_journal_errors()
+    journal = collect_journal_errors()
+    kcount, storage_hit = journal.kernel_count, journal.storage_hit
+    scount, benign_n = journal.system_count, journal.benign_count
+    journal_reason = {
+        JOURNAL_PERMISSION: "读取权限不足，无法确认完整系统日志",
+        JOURNAL_FAILED: "journalctl 执行失败，无法确认完整系统日志",
+        JOURNAL_INCOMPLETE: "journalctl 提示读取范围不完整，无法确认完整系统日志",
+    }
     if kcount is None:
-        col.add(UNKNOWN, "24h 内核错误", "journalctl 读取失败")
+        col.add(UNKNOWN, "24h 内核错误", journal_reason.get(
+            journal.kernel_state, "journalctl 读取状态未知"))
     elif kcount == 0:
         col.add(OK, "24h 内核错误", "0 条 err 及以上")
     else:
@@ -566,7 +607,8 @@ def evaluate(host, mem, temps, disks, db, svcs, nmb, containers, cerr, rootp, co
                 "%d 条%s" % (kcount, "（含疑似存储/文件系统错误）" if storage_hit else ""))
     note = "；另剔除 %d 条非交互 sudo 授权拒绝（良性）" % benign_n if benign_n else ""
     if scount is None:
-        col.add(UNKNOWN, "24h 系统错误", "journalctl 读取失败")
+        col.add(UNKNOWN, "24h 系统错误", journal_reason.get(
+            journal.system_state, "journalctl 读取状态未知"))
     else:
         col.add(WARN if scount else OK, "24h 系统错误", "%d 条 err 及以上%s" % (scount, note))
 
