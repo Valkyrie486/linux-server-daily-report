@@ -591,23 +591,33 @@ def render(col, host):
     return msg, overall
 
 
-def write_log(msg, overall, sent):
-    os.makedirs(LOG_DIR, mode=0o700, exist_ok=True)
-    os.chmod(LOG_DIR, 0o700)
-    day = os.path.join(LOG_DIR, datetime.now().strftime("%Y-%m-%d") + ".log")
-    with open(day, "a", encoding="utf-8") as f:
-        f.write("\n===== %s | overall=%s | sent=%s =====\n"
-                % (datetime.now().strftime("%F %T %Z"), overall, sent))
-        f.write(msg + "\n")
-    latest = os.path.join(LOG_DIR, "latest.md")
-    with open(latest, "w", encoding="utf-8") as f:
-        f.write(msg + "\n")
-    os.chmod(day, 0o600)
-    os.chmod(latest, 0o600)
+def write_log(msg, overall, result):
+    # Ensure newly created files are private even when launched from a shell
+    # whose umask is more permissive than the systemd unit's UMask=0077.
+    previous_umask = os.umask(0o077)
+    try:
+        os.makedirs(LOG_DIR, mode=0o700, exist_ok=True)
+        os.chmod(LOG_DIR, 0o700)
+        day = os.path.join(LOG_DIR, datetime.now().strftime("%Y-%m-%d") + ".log")
+        if os.path.exists(day):
+            os.chmod(day, 0o600)
+        with open(day, "a", encoding="utf-8") as f:
+            f.write("\n===== %s | overall=%s | result=%s =====\n"
+                    % (datetime.now().strftime("%F %T %Z"), overall, result))
+            f.write(msg + "\n")
+        latest = os.path.join(LOG_DIR, "latest.md")
+        if os.path.exists(latest):
+            os.chmod(latest, 0o600)
+        with open(latest, "w", encoding="utf-8") as f:
+            f.write(msg + "\n")
+        os.chmod(day, 0o600)
+        os.chmod(latest, 0o600)
+    finally:
+        os.umask(previous_umask)
     # retention
     rc, out, _ = run(["find", LOG_DIR, "-name", "*.log", "-mtime", "+%d" % RETENTION_DAYS,
                       "-delete"])
-    return latest
+    return day, latest
 
 
 def load_key(path):
@@ -656,14 +666,22 @@ def main():
 
     if args.dry_run:
         print(msg)
+        try:
+            day_path, latest_path = write_log(msg, overall, "DRY RUN (not sent)")
+        except OSError as e:
+            print("REPORT_SAVE_ERROR unable to save report under %s (%s)"
+                  % (LOG_DIR, type(e).__name__), file=sys.stderr)
+            return 3
         print("\n[dry-run] 不发送；严重=%d 注意=%d 未知=%d；字节=%d"
               % (col.count(CRIT), col.count(WARN), col.count(UNKNOWN), len(msg.encode())))
+        print("[dry-run] 报告已保存：%s" % latest_path)
+        print("[dry-run] 当日日志：%s" % day_path)
         return 0
 
     # Scheduled run before the operator has provisioned a key: skip quietly
     # (exit 0) so an enabled timer does not generate daily failures.
     if not os.path.exists(args.key_file):
-        write_log(msg, overall, "SKIPPED: key file not provisioned (%s)" % args.key_file)
+        write_log(msg, overall, "SKIPPED: key file not provisioned")
         print("SEND_SKIP no key file at %s (message rendered & logged only)" % args.key_file)
         return 0
 
@@ -678,7 +696,7 @@ def main():
         print("SEND_ERROR request failed (%s); details withheld for secret safety" % error_type)
         return 1
     ok = (resp.get("errcode") == 0)
-    write_log(msg, overall, "ok" if ok else "failed:%s" % resp)
+    write_log(msg, overall, "SENT" if ok else "FAILED: WeCom errcode=%s" % resp.get("errcode"))
     # do not print the key; only errcode/errmsg
     print("SEND_RESULT errcode=%s errmsg=%s" % (resp.get("errcode"), resp.get("errmsg")))
     return 0 if ok else 2
