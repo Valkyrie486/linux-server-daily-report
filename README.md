@@ -8,17 +8,27 @@ Debian 官方 Stretch 页面说明该版本已停止安全更新；继续使用�
 
 ## A. 获取项目和适用环境
 
-此次检查的本地 Git 仓库没有配置 `origin`，也没有已验证的公开下载 URL。因此目前不能提供可用的 `git clone` 地址；请从项目维护者处取得完整项目文件夹或压缩包。不要把下面的占位文本当作真实仓库地址。
+公开仓库地址为 [Valkyrie486/linux-server-daily-report](https://github.com/Valkyrie486/linux-server-daily-report)。在 Debian 终端中运行以下命令获取项目。建议克隆到当前用户主目录，这与后续示例及 user-level service 的默认路径一致：
 
-将取得的完整文件夹放到 Debian 用户主目录，并命名为 `linux-server-daily-report`。目录结构至少应有：
+```bash
+cd "$HOME"
+git clone https://github.com/Valkyrie486/linux-server-daily-report.git
+cd linux-server-daily-report
+```
+
+获取项目需要 Git 客户端；脚本运行本身不依赖 Git。可用 `command -v git` 检查。如果命令不存在，请由管理员通过已配置的 Debian 官方软件源安装 Git；Stretch 软件源已归档时，遵循上文关于官方归档源的说明。
+
+克隆完成后，项目根目录应包含以下文件：
 
 ```text
 linux-server-daily-report/
 ├── README.md
+├── LICENSE
 ├── scripts/asus-daily-summary.py
 ├── systemd/asus-daily-summary.service
 ├── systemd/asus-daily-summary.timer
-└── systemd/asus-daily-summary.env.example
+├── systemd/asus-daily-summary.env.example
+└── tests/test_daily_summary.py
 ```
 
 本项目不是 Windows 桌面应用。**所有 Linux 命令都在 Debian 9.8 终端执行**，不要双击 Python 文件，也不要在 Windows 原生 PowerShell 直接运行 Linux 采集脚本。WSL Ubuntu 24.04 只用于本地开发测试，不是本项目本次声明支持的目标系统。
