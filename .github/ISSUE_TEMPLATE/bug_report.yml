@@ -1,0 +1,63 @@
+name: 缺陷反馈
+description: 报告可复现的问题，帮助维护者定位原因。
+title: "[缺陷] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先查看 README 的常见问题。请不要粘贴企业微信 key、Webhook URL、密码、数据库或未脱敏的生产日志。
+  - type: textarea
+    id: summary
+    attributes:
+      label: 问题描述
+      description: 简洁说明发生了什么。
+      placeholder: 运行哪一步时出现了什么异常？
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 按顺序列出命令或操作。请勿包含真实密钥。
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果与实际结果
+      description: 分别描述你原本期待的行为和实际观察到的行为。
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: 测试环境
+      description: 选择最接近的环境。项目尚未在 Debian 9.8 实机上完成验证。
+      options:
+        - Debian GNU/Linux 9.8（Stretch）
+        - WSL Ubuntu 24.04
+        - 其他 Linux 发行版
+        - 其他环境或不确定
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python 版本
+      description: 请提供 `python3 --version` 输出。
+      placeholder: Python 3.x
+  - type: textarea
+    id: logs
+    attributes:
+      label: 脱敏后的相关输出
+      description: 可附上错误信息或最小复现信息。请移除 key、Webhook URL、主机标识、私人路径和其他敏感内容。
+      render: text
+  - type: textarea
+    id: notes
+    attributes:
+      label: 其他背景
+      description: 例如是否使用 Beszel、Docker、systemd user timer，或哪些可选数据源尚未配置。

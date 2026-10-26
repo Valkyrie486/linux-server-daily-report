@@ -362,6 +362,12 @@ systemctl --user daemon-reload
 
 **本次没有 Debian GNU/Linux 9.8 实机或虚拟机**，因此 Python 3.5 运行兼容性、Stretch systemd 指令兼容性及下列真实集成未完成端到端验证：Beszel schema/权限、Docker daemon、SMART 上报、root 巡检报告、journald 权限、user-level timer 实际触发、企业微信网络和消息发送。请在目标机先手动 dry-run，再自行按 G 节逐步启用；不要把 WSL 测试或静态检查当成 Debian 9.8 验收。
 
+## 反馈问题与参与贡献
+
+遇到缺陷时，请使用 [缺陷反馈表单](https://github.com/Valkyrie486/linux-server-daily-report/issues/new?template=bug_report.yml)；有新功能想法时，可以提交 [功能建议](https://github.com/Valkyrie486/linux-server-daily-report/issues/new?template=feature_request.yml)。也欢迎通过 Pull Request 改进代码、测试和中文文档。
+
+提交前请阅读 [贡献指南](CONTRIBUTING.md)。请勿在 Issue、PR 或截图中公开企业微信 key、Webhook URL、私人配置、Beszel 数据库或未脱敏的生产日志。由于目标环境和部分外部集成尚未完成端到端验证，反馈时请注明真实测试环境，并明确区分已验证结果与推测。
+
 ## AI 辅助开发说明
 
 开发过程中使用 AI 编程助手协助梳理需求和代码结构、检查 Bash 巡检脚本的发布边界、编写与修改 Python 代码、处理 Python 版本兼容性、分析问题、设计和补充自动化测试，以及整理安装配置步骤、README 和故障排查内容。未经确认的生产 Bash 脚本没有因此被纳入公开仓库。AI 是提高开发与文档工作的辅助工具；项目维护者提供运维背景和目标、确定需求、审阅并选择修改、核对可执行的检查结果，并负责是否发布的决定。项目不是由 AI 自主决定需求或独立验证上线。
